@@ -3,6 +3,7 @@
 namespace LaraAreaTranslation;
 
 use Illuminate\Database\Eloquent\Model;
+use LaraAreaTranslation\Traits\LanguageAttributeTrait;
 
 /**
  * Class Translation
@@ -10,6 +11,8 @@ use Illuminate\Database\Eloquent\Model;
  */
 class Translation extends Model
 {
+    use LanguageAttributeTrait;
+
     /**
      * @var
      */
@@ -18,7 +21,7 @@ class Translation extends Model
     /**
      * @var
      */
-    public static $staticFillable;
+    public static $staticFillable = [];
 
     /**
      * @return string
@@ -29,7 +32,7 @@ class Translation extends Model
     }
 
     /**
-     * @return string
+     * @return array
      */
     public function getFillable()
     {
@@ -39,7 +42,7 @@ class Translation extends Model
     /**
      * @param $table
      */
-    public static function setStaticTable($table)
+    public static function setDynamicTable($table)
     {
         self::$staticTable = $table;
     }
@@ -47,7 +50,7 @@ class Translation extends Model
     /**
      * @param $fillable
      */
-    public static function setStaticFillable($fillable)
+    public static function setDynamicFillable($fillable)
     {
         self::$staticFillable = $fillable;
     }
