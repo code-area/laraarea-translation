@@ -8,17 +8,14 @@ use LaraAreaTranslation\Translation;
 
 trait TranslationTrait
 {
+    use LanguageAttributeTrait;
+
     /**
      * Translationable columns
      *
      * @var
      */
     protected $translateable;
-
-    /**
-     * @var string
-     */
-    protected $translationPrimaryKey = 'id';
 
     /**
      * @var int
@@ -28,22 +25,7 @@ trait TranslationTrait
     /**
      * @var
      */
-    protected $translationForeignColumn;
-
-    /**
-     * @var
-     */
     protected $translationTable;
-
-    /**
-     * @var
-     */
-    protected $language;
-
-    /**
-     * @var
-     */
-    protected $languageColumn = 'language';
 
     /**
      * Resource translation instance
@@ -51,6 +33,22 @@ trait TranslationTrait
      * @var
      */
     protected $translation;
+
+    /**
+     * @param static| integer $main
+     * @return \Illuminate\Database\Eloquent\Builder
+     */
+    public static function translationsQuery($model)
+    {
+        if (is_a($model, static::class)) {
+            return $model->translations();
+        }
+
+        $self = (new static());
+        $self->prepareTranslationModel();
+        $foreignColumn = $self->getTranslationForeignColumn();
+        return Translation::query()->where($foreignColumn, $model);
+    }
 
     /**
      * Define all translations relations
@@ -61,38 +59,32 @@ trait TranslationTrait
     {
         $foreignId = $this->getTranslationForeignColumn();
         if (\ConstTranslationResource::TRANSLATIONS_TABLE == $this->getTranslationSource()) {
-            $translationTable = $this->getTranslationTable();
-            Translation::setStaticTable($translationTable);
+            $this->prepareTranslationModel();
             return $this->hasMany(Translation::class, $foreignId);
         }
 
         return $this->hasMany(get_class($this), $foreignId);
     }
 
-    public function translationQuery()
-    {
-        $translationTable = $this->getTranslationTable();
-        Translation::setStaticTable($translationTable);
-        return Translation::query();
-    }
-
     /**
+     * @param bool $makeProperty
      * @param null $language
      * @param array $columns
-     * @param bool $makeDefaultProperty
+     * @param null $languageColumn
      * @return $this
      */
-    public function translate($language = null, $columns = [], $makeDefaultProperty = true)
+    public function translate($makeProperty = true, $language = null, $columns = [], $languageColumn = null)
     {
-        $language = $language ?? $this->getLanguage();
-        $columns = $columns ? $columns : $this->getTranslateAbleColumns();
-        $languageColumn = $languageColumn ?? $this->getLanguageColumn();
-        $translation = $this->getTranslationBy($columns, $language, $languageColumn);
+        $language = $language ?? App::getLocale();
+        $languageColumn = $languageColumn ?? $this->getLanguageColumnName();
+        $columns = $columns ?: $this->getTranslateAbleColumns();
 
-        if ($makeDefaultProperty) {
+        $this->translation = $this->getTranslationBy($language, $columns, $languageColumn);
+
+        if ($makeProperty) {
             foreach ($columns as $column) {
                 if (key_exists($column, $this->attributes)) {
-                    $this->{$column . '_default'} = $translation->{$column} ?? $this->{$column};
+                    $this->{$column . '_translated'} = $this->translation->{$column} ?? $this->{$column};
                 }
             }
             return $this;
@@ -108,63 +100,77 @@ trait TranslationTrait
     }
 
     /**
-     * @param $columns
      * @param $language
+     * @param $columns
      * @param $languageColumn
      * @return mixed
      */
-    public function getTranslationBy($columns, $language, $languageColumn)
+    public function getTranslationBy($language, $columns, $languageColumn)
     {
-        $language = $language ?? $this->getLanguage();
-        $columns = $columns ?? $this->getTranslateAbleColumns();
-        $languageColumn = $languageColumn ?? $this->getLanguageColumn();
+        $language = $language ?? App::getLocale();
+        $languageColumn = $languageColumn ?? $this->getLanguageColumnName();
+        $columns = $columns ?: $this->getTranslateAbleColumns();
 
         if (key_exists('translations', $this->relations)) {
-            $this->translation = $this->translations
-                ->when($language, function ($items) use ($languageColumn, $language) {
-                    return $items->where($languageColumn, $language);
-                })
-                ->first();
+            $this->translation = $this->translations->where($languageColumn, $language)->first();
+
             if (empty($this->translation)) {
-                return $this->loadTranslation($columns, $language, $languageColumn);
+                return $this->loadTranslation($language, $columns, $languageColumn);
             }
 
             return $this->translation;
         }
 
-        return $this->loadTranslation($columns, $language, $languageColumn);
+        return $this->loadTranslation($language, $columns, $languageColumn);
     }
 
     /**
-     * @return mixed
-     */
-    public function getTranslation()
-    {
-        return $this->translation;
-    }
-
-    /**
-     * @param $columns
      * @param $language
+     * @param $columns
      * @param $languageColumn
-     * @return mixed
+     * @return \Illuminate\Database\Eloquent\Builder|\Illuminate\Database\Eloquent\Model|object|null
      */
-    protected function loadTranslation($columns, $language, $languageColumn)
+    protected function loadTranslation($language, $columns, $languageColumn)
     {
-        $selectColumns = array_merge($columns, [$this->getTranslationKeyName(), $languageColumn]);
-        $translations = $this->translations()
+        $selectColumns = array_merge($columns, [$this->getKeyName(), $languageColumn]);
+        return self::translationsQuery($this)
             ->select($selectColumns)
-            ->when($language, function ($q) use ($languageColumn, $language) {
-                $q->where($languageColumn, $language);
-            })
-            ->limit(1)
-            ->get();
+            ->where($languageColumn, $language)
+            ->first();
+    }
 
-        $this->translation = $language
-            ? $translations->where($languageColumn, $language)->first()
-            : $this->translation = $translations->first();
+    /**
+     * @param $query
+     */
+    public function scopeMain($query)
+    {
+        $foreignId = $this->getTranslationForeignColumn();
+        if (\ConstTranslationResource::SAME_TABLE == $this->getTranslationSource()) {
+            $query->whereNull($foreignId);
+        }
+    }
 
-        return $this->translation;
+    /**
+     * @param bool $setFillable
+     */
+    protected function prepareTranslationModel($setFillable = true)
+    {
+        $translationTable = $this->getTranslationTable();
+        Translation::setDynamicTable($translationTable);
+        if ($setFillable) {
+            $fillable = $this->getTranslateAbleColumns();
+            $fillable[] = $this->getTranslationForeignColumn();
+            $fillable[] = $this->getLanguageColumnName();
+            Translation::setDynamicFillable($fillable);
+        }
+    }
+
+    /**
+     * @return int
+     */
+    public function getTranslationSource()
+    {
+        return $this->translationSource;
     }
 
     /**
@@ -186,13 +192,12 @@ trait TranslationTrait
         return array_merge($columns, $this->getTranslateAbleColumns());
     }
 
-
     /**
      * @return string
      */
     public function getTranslationForeignColumn()
     {
-        return \ConstTranslationResource::TRANSLATIONS_TABLE == $this->translationSource
+        return \ConstTranslationResource::TRANSLATIONS_TABLE == $this->getTranslationSource()
             ? 'translatable_id'
             : 'parent_id';
     }
@@ -203,40 +208,9 @@ trait TranslationTrait
     public function getTranslationTable()
     {
         if (is_null($this->translationTable)) {
-            return Str::singular($this->getTable()) . '_translations';
+            $this->translationTable = Str::singular($this->getTable()) . '_translations';
         }
 
         return $this->translationTable;
-    }
-
-    /**
-     * @return string
-     */
-    public function getLanguageColumn()
-    {
-        return $this->languageColumn;
-    }
-
-    /**
-     * @return string
-     */
-    public function getLanguage()
-    {
-        return $this->language ?? App::getLocale();
-    }
-
-    /**
-     * Get the primary key for the model.
-     *
-     * @return string
-     */
-    public function getTranslationKeyName()
-    {
-        return $this->translationPrimaryKey;
-    }
-
-    public function getTranslationSource()
-    {
-        return $this->translationSource;
     }
 }
