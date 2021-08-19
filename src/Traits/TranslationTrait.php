@@ -45,8 +45,12 @@ trait TranslationTrait
         }
 
         $self = (new static());
-        $self->prepareTranslationModel();
         $foreignColumn = $self->getTranslationForeignColumn();
+        if (\ConstTranslationResource::SAME_TABLE == $self->getTranslationSource()) {
+            return $self::query()->where($foreignColumn, $model);
+        }
+
+        $self->prepareTranslationModel();
         return Translation::query()->where($foreignColumn, $model);
     }
 
